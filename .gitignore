@@ -1,0 +1,5 @@
+Datasets/trainingset/
+Datasets/validationset/
+groundtruth.tsv
+pred_class.tsv
+pred_prob.tsv
