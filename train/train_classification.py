@@ -4,12 +4,13 @@ import sys
 import time
 import cv2
 import os
+import datetime
 sys.path.append("..")
 from torch.utils.data import DataLoader
 from Datasets.DataLoader import Img_DataLoader
 from utils.utils import configure_optimizers
 class trainer_classification(nn.Module):
-    def __init__(self, train_image_files, validation_image_files, gamma = 0.1,
+    def __init__(self, train_image_files, validation_image_files, train_labels, validation_labels, gamma = 0.1,
                                init_lr = 0.001, weight_decay = 0.0005, batch_size = 32, epochs = 30, lr_decay_every_x_epochs = 10,
                  print_steps = 50, df = None, img_transform = False, model =False,
                 save_checkpoints_dir = None):
@@ -21,6 +22,8 @@ class trainer_classification(nn.Module):
         
         self.train_image_files = train_image_files
         self.validation_image_files = validation_image_files
+        self.train_labels = train_labels
+        self.validation_labels = validation_labels
         self.batch_size = batch_size
         self.epoch = epochs
         self.global_step = 0
@@ -33,10 +36,11 @@ class trainer_classification(nn.Module):
         self.img_transform = img_transform
         self.model = model
         self.save_checkpoints_dir = save_checkpoints_dir
+        self.date = datetime.datetime.now()
 
 
-    def _dataloader(self, datalist, split='train',img_transform = False):
-        dataset = Img_DataLoader(img_list=datalist, split=split, transform = img_transform, df = self.df)
+    def _dataloader(self, datalist, labels, split='train',img_transform = False):
+        dataset = Img_DataLoader(img_list=datalist, labels=labels, split=split, transform = img_transform, df = self.df)
         shuffle = True if split == 'train' else False
         dataloader = DataLoader(dataset, batch_size=self.batch_size, num_workers=2, shuffle=shuffle)
         return dataloader
@@ -45,16 +49,19 @@ class trainer_classification(nn.Module):
         t0 = 0.0
         model.train()
         for inputs in train_loader:
-            
             self.global_step += 1
             self.current_step +=1
 
             t1 = time.time()
 
-            images, masks = inputs["image"].cuda(), inputs["mask"].cuda()
-            mask_out = model(images)
+            batch_images = inputs["image"].cuda()
+            ground_truths = inputs["label"]
+            ground_truths = ground_truths.reshape(ground_truths.shape[0]).cuda()
+            
+            logit_predictions = model(batch_images)
 
-            total_loss = nn.BCELoss()(mask_out, masks)
+
+            total_loss = nn.CrossEntropyLoss()(logit_predictions, ground_truths)
 
             optimizer.zero_grad()
             total_loss.backward()
@@ -77,18 +84,21 @@ class trainer_classification(nn.Module):
             model.eval()
 
             for i, inputs in enumerate(data_loader):
-                images, masks = inputs["image"].cuda(), inputs["mask"].cuda()
-                mask_out = model(images)
+                images = inputs["image"].cuda()
+                
+                ground_truths = inputs["label"]
+                ground_truths = ground_truths.reshape(ground_truths.shape[0]).cuda()
+                
+                predictions = model(images)
                 
                 if i == 0:
-                    predictions = mask_out
-                    groundtruths = masks
+                    all_predictions = predictions
+                    all_groundtruths = ground_truths
                 else:
-                    predictions = torch.cat((predictions, mask_out), dim=0)
-                    groundtruths = torch.cat((groundtruths, masks), dim=0)
+                    all_predictions = torch.cat((all_predictions, predictions), dim=0)
+                    all_groundtruths = torch.cat((all_groundtruths, ground_truths), dim=0)
 
-            loss = torch.nn.BCELoss()
-            total_loss = loss(predictions, groundtruths)
+            total_loss = nn.CrossEntropyLoss()(all_predictions, all_groundtruths)
 
 
         print("==> Epoch: %d Loss %.6f ." % (epoch+1, total_loss.cpu().numpy() ))
@@ -97,7 +107,7 @@ class trainer_classification(nn.Module):
         return total_loss
 
     def train(self,model):
-        print("==> Create model.")
+        print("==> Create model")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model= nn.DataParallel(model)
         model.to(device)
@@ -105,14 +115,14 @@ class trainer_classification(nn.Module):
         model.cuda()
         print("==> List learnable parameters")
 
-        print("==> Load data.")
+        print("==> Load data")
         print(len(self.train_image_files))
         print(len(self.validation_image_files))
 
-        train_data_loader = self._dataloader(self.train_image_files, split='train', img_transform=self.img_transform)
-        val_data_loader = self._dataloader(self.validation_image_files, split='val', img_transform=self.img_transform)
+        train_data_loader = self._dataloader(self.train_image_files, self.train_labels, split='train', img_transform=self.img_transform)
+        val_data_loader = self._dataloader(self.validation_image_files, self.validation_labels, split='val', img_transform=self.img_transform)
 
-        print("==> Configure optimizer.")
+        print("==> Configure optimizer")
         optimizer, lr_scheduler = configure_optimizers(model, self.init_lr, self.weight_decay,
                                                        self.gamma, self.lr_decay_every_x_epochs)
 
@@ -121,9 +131,9 @@ class trainer_classification(nn.Module):
 
         loss_list = []
         
-        print('==> Creat the saving dictionary')
+        print('==> Create the saving dictionary')
         if os.path.exists(self.save_checkpoints_dir):
-            print('The directory exists, overided the files if duplicates')
+            print('The directory exists, overrode duplicate files')
         else:
             print('Created new dictionary for saving checkpoints')
             os.makedirs(self.save_checkpoints_dir)
@@ -132,6 +142,8 @@ class trainer_classification(nn.Module):
             self.train_one_epoch( epoch, train_data_loader, model, optimizer, lr_scheduler)
             _loss = self.val_one_epoch(val_data_loader, model, epoch)
             loss_list.append(_loss.detach().cpu().numpy())
+
+            bestcheckpointstr = "/checkpoint_best_"+ str(self.date.year) + str(self.date.month) + str(self.date.day) + str(self.date.hour) + ".ckpt"
             
             torch.save({
             'epoch': epoch,
@@ -139,7 +151,7 @@ class trainer_classification(nn.Module):
             if _loss.detach().cpu().numpy()<= min(loss_list):
                 torch.save({
             'epoch': epoch,
-            'model_state_dict': model.state_dict(),}, self.save_checkpoints_dir+'/checkpoint_best.ckpt')
+            'model_state_dict': model.state_dict(),}, self.save_checkpoints_dir+bestcheckpointstr)
             lr_scheduler.step()
             
 

@@ -172,3 +172,38 @@ def get_overall_multiclass_metrics(y_true, y_pred, y_score):
             'auc_ovr_weighted': roc_auc_score(y_true=y_true, y_score=y_score,
                                            average='weighted',
                                            multi_class='ovr')}
+import cv2
+import numpy as np
+
+def segment_cell(filepath):
+
+    # Load image
+    img = cv2.imread(filepath)
+
+        
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img_hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    
+    # Define HSV range for purple
+    lower_purple = np.array([120, 40, 40])   # Adjust as needed
+    upper_purple = np.array([160, 255, 255])
+    
+    # Remove everything that isn't in the purple range
+    mask = cv2.inRange(img_hsv, lower_purple, upper_purple)
+
+
+    # Make bottom right corner, where text is, always black
+    mask_height, mask_width = mask.shape
+    x_start, y_start = 0, int(mask_height * 0.85)     # Bottom 15% of image
+    x_end, y_end = int(mask_width * 0.42), mask_height  # Left 42% width
+
+    mask[y_start:y_end, x_start:x_end] = 0  
+    
+    # Apply mask to RGB image
+    result = cv2.bitwise_and(img_rgb, img_rgb, mask=mask)
+    
+    # Set background to black explicitly (make sure to mask everything else)
+    black_background = np.zeros_like(img_rgb)
+    img_segmented = np.where(mask[:, :, None] > 0, result, black_background)
+    
+    return img_rgb, img_segmented
