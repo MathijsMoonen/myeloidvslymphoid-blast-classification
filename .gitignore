@@ -2,7 +2,15 @@ Datasets/trainingset/
 Datasets/validationset/
 Datasets/notextimages/
 Datasets/segmentedimages/
+Datasets/croppedimages/
+Datasets/rotatedimagesexperiment/
+Datasets/notextrotatedimagesexperiment/
 Datasets/segmentedimages010525 - w too short blackbars bottom right/
+checkpoints/
+matches/
 groundtruth.tsv
 pred_class.tsv
 pred_prob.tsv
+*.pkl
+*.png"*.pkl" 
+"*.png" 
