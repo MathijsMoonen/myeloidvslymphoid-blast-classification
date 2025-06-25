@@ -56,7 +56,7 @@ class Img_DataLoader(data.Dataset):
         # if self.if_external:
         #     img = cv2.resize(img, (96, 96), interpolation=cv2.INTER_AREA)
         
-
+        # Re-order axes from (height, width, channels) → (channels, height, width), which Pytorch expects
         img = np.einsum('ijk->kij', img)
 
         #Extract the categorical value associated with the cell type (Lymphoid, Myeloid, Other) and respectively (0,  1, 2) 
