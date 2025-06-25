@@ -11,7 +11,7 @@ from Datasets.DataLoader import Img_DataLoader
 from utils.utils import configure_optimizers
 class trainer_classification(nn.Module):
     def __init__(self, train_image_files, validation_image_files, train_labels, validation_labels, gamma = 0.1,
-                               init_lr = 0.001, weight_decay = 0.0005, batch_size = 32, epochs = 30, lr_decay_every_x_epochs = 10,
+                               init_lr = 0.001, weight_decay = 0.0005, batch_size = 32, epochs = 30, Tmax = 10,
                  print_steps = 50, df = None, img_transform = False, model =False,
                 save_checkpoints_dir = None):
         super(trainer_classification, self).__init__()
@@ -29,7 +29,7 @@ class trainer_classification(nn.Module):
         self.global_step = 0
         self.current_step = 0
         self.init_lr = init_lr
-        self.lr_decay_every_x_epochs = lr_decay_every_x_epochs
+        self.Tmax = Tmax
         self.weight_decay = weight_decay
         self.gamma = gamma
         self.print_steps = print_steps
@@ -37,6 +37,7 @@ class trainer_classification(nn.Module):
         self.model = model
         self.save_checkpoints_dir = save_checkpoints_dir
         self.date = datetime.datetime.now()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
     def _dataloader(self, datalist, labels, split='train',img_transform = False):
@@ -56,15 +57,24 @@ class trainer_classification(nn.Module):
 
             batch_images = inputs["image"].cuda()
             ground_truths = inputs["label"]
-            ground_truths = ground_truths.reshape(ground_truths.shape[0]).cuda()
+            ground_truths = ground_truths.reshape(ground_truths.shape[0]).to(self.device)
             
             logit_predictions = model(batch_images)
 
+            # The old loss function that treats each class and thus each sample equally. Usage should be reconsidered if upsampling resolves class imbalance
+            #total_loss = nn.CrossEntropyLoss()(logit_predictions, ground_truths)
 
-            total_loss = nn.CrossEntropyLoss()(logit_predictions, ground_truths)
-
+            #The new loss function, that weights the loss such that it penalizes the model for misclassifying the minority class, the weights are 0.0804 for 'Other', 0.7941 for 'Lymphoid',  and 0.1255 for 'Myeloid'
+            
+#            class_weights = torch.tensor([0.0804, 0.7941, 0.1255], dtype=torch.float).to(self.device)
+#            criterion = nn.CrossEntropyLoss(weight=torch.tensor([0.0804, 0.7941, 0.1255], dtype=torch.float)).to(self.device)
+#            total_loss = criterion(logit_predictions, ground_truths)
+            total_loss = nn.CrossEntropyLoss(weight=torch.tensor([0.7941, 0.1255, 0.0804], dtype=torch.float).to(self.device))(logit_predictions, ground_truths)
+            
             optimizer.zero_grad()
             total_loss.backward()
+
+            
             optimizer.step()
             t0 += (time.time() - t1)
 
@@ -98,7 +108,14 @@ class trainer_classification(nn.Module):
                     all_predictions = torch.cat((all_predictions, predictions), dim=0)
                     all_groundtruths = torch.cat((all_groundtruths, ground_truths), dim=0)
 
-            total_loss = nn.CrossEntropyLoss()(all_predictions, all_groundtruths)
+            # Old loss function
+            #total_loss = nn.CrossEntropyLoss()(all_predictions, all_groundtruths)
+            
+            #The new loss function, that weights the loss such that it penalizes the model for misclassifying the minority class, the weights are 0.0804 for 'Other', 0.7941 for 'Lymphoid',  and 0.1255 for 'Myeloid'
+            # class_weights = torch.tensor([0.7941, 0.1255, 0.0804], dtype=torch.float).cpu()
+            # criterion = nn.CrossEntropyLoss(weight=class_weights).cpu()
+            # total_loss = criterion(logit_predictions, ground_truths)
+            total_loss = nn.CrossEntropyLoss(weight=torch.tensor([0.7941, 0.1255, 0.0804], dtype=torch.float).to(self.device))(all_predictions, all_groundtruths)
 
 
         print("==> Epoch: %d Loss %.6f ." % (epoch+1, total_loss.cpu().numpy() ))
@@ -124,7 +141,7 @@ class trainer_classification(nn.Module):
 
         print("==> Configure optimizer")
         optimizer, lr_scheduler = configure_optimizers(model, self.init_lr, self.weight_decay,
-                                                       self.gamma, self.lr_decay_every_x_epochs)
+                                                       self.gamma, self.Tmax)
 
         print("==> Start training")
         since = time.time()
